@@ -1,184 +1,147 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import openai
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
-# -------------------------------
-# Page Setup
-# -------------------------------
-st.set_page_config(page_title="MacroMoney v2.4", layout="centered")
+# ---------------- CONFIG ---------------- #
+st.set_page_config(
+    page_title="MacroMoney",
+    layout="wide",
+)
 
+# ---------------- UI HEADER ---------------- #
 st.markdown("""
-# 💹 MacroMoney – Horizon-Aware Macro Portfolio Engine  
-### _Demo Model (v2.4)_
+# 📊 MacroMoney  
+**Macro-aware portfolio intelligence (Demo)**  
 
-Analyze a news headline, score macro relevance, apply horizon-aware rebalancing, and view suggested portfolio allocation.
+Understand how global events *should* affect your portfolio.
 """)
 
-st.markdown("---")
+# ---------------- USER INPUTS ---------------- #
+st.sidebar.header("Investor Profile")
 
-# -------------------------------
-# User Inputs
-# -------------------------------
-st.markdown("## 🧮 Step 1: Define Portfolio & Horizon")
+capital = st.sidebar.number_input(
+    "💰 Capital Amount ($)",
+    min_value=1000,
+    step=1000,
+    value=10000
+)
 
-capital = st.number_input("Capital Amount ($)", min_value=1000, value=10000, step=500)
-st.info("Enter manual weights. Total must sum to 100%.")
+time_horizon = st.sidebar.selectbox(
+    "⏳ Investment Horizon",
+    ["< 1 year", "1–3 years", "> 3 years"]
+)
 
-equity_w = st.number_input("Equities (%)", 0, 100, 20)
-bond_w   = st.number_input("Bonds (%)", 0, 100, 20)
-etf_w    = st.number_input("ETFs (%)", 0, 100, 20)
-crypto_w = st.number_input("Cryptocurrency (%)", 0, 100, 20)
-cmdty_w  = st.number_input("Commodities (%)", 0, 100, 20)
+risk_tolerance = st.sidebar.selectbox(
+    "⚖️ Risk Tolerance",
+    ["Low", "Medium", "High"]
+)
 
-initial_weights = {
-    "Equities": equity_w,
-    "Bonds": bond_w,
-    "ETFs": etf_w,
-    "Crypto": crypto_w,
-    "Commodities": cmdty_w
+st.sidebar.markdown("---")
+
+st.sidebar.header("Asset Allocation (%)")
+
+assets = ["Equities", "Bonds", "Gold", "Crypto", "Commodities", "ETFs"]
+weights = {}
+
+for asset in assets:
+    weights[asset] = st.sidebar.slider(asset, 0, 100, int(100/len(assets)))
+
+# Normalize weights
+total_weight = sum(weights.values())
+weights = {k: v/total_weight for k, v in weights.items()}
+
+# ---------------- NEWS INPUT ---------------- #
+st.markdown("## 📰 Enter News Headline")
+news = st.text_input(
+    "Paste a market-related news headline",
+    placeholder="Example: Gold prices hit all-time high amid geopolitical tensions"
+)
+
+# ---------------- MACRO INTELLIGENCE ---------------- #
+
+macro_event_map = {
+    "geopolitical": ["assassination", "war", "conflict", "attack", "military"],
+    "monetary": ["interest rate", "inflation", "fed", "central bank"],
+    "commodity": ["gold", "oil", "commodity", "prices hit"],
+    "corporate": ["earnings", "profit", "loss", "quarter"],
+    "political": ["election", "prime minister", "president", "resigns"],
 }
 
-total_alloc = sum(initial_weights.values())
-if total_alloc != 100:
-    st.error(f"Total allocation is {total_alloc}%. Please adjust to 100%.")
-    st.stop()
-
-horizon_years = st.number_input("Investment Horizon (years)", min_value=0.1, max_value=30.0, value=1.0, step=0.1)
-
-st.markdown("---")
-
-# -------------------------------
-# Headline Input
-# -------------------------------
-st.markdown("## 📰 Step 2: Enter a Market Headline")
-headline = st.text_input("Paste headline to analyze...", placeholder="e.g., Gold prices hit all-time high")
-analyze_button = st.button("🔍 Analyze Headline")
-
-# -------------------------------
-# Macro / Micro Classification
-# -------------------------------
-macro_themes = {
-    "interest_rate": ["interest", "inflation", "cpi", "ppi", "fed", "ecb", "rate hike", "yields"],
-    "energy": ["oil", "gas", "opec", "energy supply", "pipeline", "crude"],
-    "tech": ["ai", "technology", "chip", "semiconductor", "software"],
-    "geopolitical": ["conflict", "war", "border", "sanction", "missile", "tension"],
-    "fiscal": ["stimulus", "government spending", "budget", "subsidy"],
-    "currency": ["forex", "currency", "yen", "yuan", "dollar index"],
-    "labor": ["unemployment", "jobs", "wage", "labor market"],
-    "crypto": ["bitcoin", "crypto", "ethereum", "token", "blockchain"],
-    "political_shock": ["assassination", "prime minister", "president", "resignation", "leader death"]
+asset_sensitivity = {
+    "Equities": {"geopolitical": 0.8, "monetary": 0.9, "commodity": 0.4, "corporate": 1.0, "political": 0.7},
+    "Bonds": {"geopolitical": 0.6, "monetary": 1.0, "commodity": 0.3, "corporate": 0.2, "political": 0.6},
+    "Gold": {"geopolitical": 1.0, "monetary": 0.7, "commodity": 1.0, "corporate": 0.1, "political": 0.8},
+    "Crypto": {"geopolitical": 0.5, "monetary": 0.8, "commodity": 0.2, "corporate": 0.3, "political": 0.6},
+    "Commodities": {"geopolitical": 0.7, "monetary": 0.5, "commodity": 1.0, "corporate": 0.2, "political": 0.6},
+    "ETFs": {"geopolitical": 0.7, "monetary": 0.8, "commodity": 0.5, "corporate": 0.6, "political": 0.6},
 }
 
-micro_themes = {
-    "earnings": ["earnings", "quarterly", "revenue", "profit", "guidance"],
-    "company_specific": ["launch", "ceo", "merger", "acquisition", "company"],
-    "sector_only": ["retail sales", "chip demand", "housing data"]
+severity_keywords = {
+    "major": ["assassinated", "war", "invasion", "crisis"],
+    "medium": ["hits", "surge", "fall", "cuts", "raises"],
+    "mild": ["reports", "announces", "expects"]
 }
 
-irrelevant_keywords = ["accident", "celebrity", "movie", "festival", "sports", "award", "weather", "crime"]
+def detect_macro_event(text):
+    text = text.lower()
+    detected = []
+    for theme, keywords in macro_event_map.items():
+        if any(k in text for k in keywords):
+            detected.append(theme)
+    return detected
 
-# Severity multiplier table
-severity_weights = {
-    "crisis": 1.5, "war": 1.5, "sanction": 1.3, "default": 1.5,
-    "surge": 1.2, "collapse": 1.2, "emergency": 1.2,
-    "hike": 1.1, "cut": 1.1, "inflation": 1.1,
-    "mild": 1.0, "slight": 1.0
+def detect_severity(text):
+    text = text.lower()
+    for level, keys in severity_keywords.items():
+        if any(k in text for k in keys):
+            return level
+    return "mild"
+
+severity_multiplier = {
+    "mild": 0.5,
+    "medium": 1.0,
+    "major": 1.5
 }
 
-def classify_news(text):
-    text_lower = text.lower()
-    for w in irrelevant_keywords:
-        if w in text_lower:
-            return "irrelevant", "Local / Irrelevant News"
-    for key, words in micro_themes.items():
-        if any(w in text_lower for w in words):
-            return "micro", key
-    for key, words in macro_themes.items():
-        if any(w in text_lower for w in words):
-            return "macro", key
-    return "irrelevant", "No macro/micro signals detected"
+horizon_threshold = {
+    "< 1 year": 0.3,
+    "1–3 years": 0.6,
+    "> 3 years": 0.9
+}
 
-def compute_impact_score(text):
-    score = 0
-    for word, mult in severity_weights.items():
-        if word in text.lower():
-            score += 20 * (mult - 1 + 1)  # base 20 * multiplier
-    return min(max(score, 20), 100)  # ensure minimum 20 for demo
+# ---------------- ANALYSIS ---------------- #
+if news:
+    themes = detect_macro_event(news)
+    severity = detect_severity(news)
 
-def horizon_threshold(event_score, horizon_years):
-    if horizon_years <= 1:
-        return event_score >= 20
-    elif horizon_years <= 3:
-        return event_score >= 40
+    if not themes:
+        st.warning("🚫 This appears to be **local or irrelevant news**. No macro impact detected.")
     else:
-        return event_score >= 70
+        st.success(f"📌 Detected Macro Themes: **{', '.join(themes)}**")
+        st.info(f"⚠️ Severity Level: **{severity.upper()}**")
 
-macro_rebalance_rules = {
-    "interest_rate": {"Equities": -10, "Bonds": +10},
-    "energy": {"Commodities": +15, "Equities": -5},
-    "tech": {"Equities": +10},
-    "geopolitical": {"Bonds": +10, "Commodities": +5, "Equities": -10},
-    "fiscal": {"Equities": +10},
-    "currency": {"Bonds": +5, "Crypto": -10},
-    "labor": {"Equities": -5, "Bonds": +5},
-    "crypto": {"Crypto": +15},
-    "political_shock": {"Bonds": +10, "Equities": -10}
-}
+        impact_scores = {}
 
-def apply_rebalance(base_weights, theme, intensity_factor):
-    new_weights = base_weights.copy()
-    if theme not in macro_rebalance_rules:
-        return new_weights
-    for asset, change in macro_rebalance_rules[theme].items():
-        if asset in new_weights:
-            new_weights[asset] += change * intensity_factor
-    # normalize to sum to 100
-    total = sum(new_weights.values())
-    for k in new_weights:
-        new_weights[k] = round(new_weights[k] / total * 100, 2)
-    return new_weights
+        for asset in assets:
+            sensitivity = np.mean([asset_sensitivity[asset][t] for t in themes])
+            impact = sensitivity * severity_multiplier[severity]
+            impact_scores[asset] = impact
 
-# -------------------------------
-# Output / UI Logic
-# -------------------------------
-if analyze_button and headline:
-    event_type, theme = classify_news(headline)
-    impact_score = compute_impact_score(headline)
-    st.markdown("## 🧠 Analysis Result")
-    st.write(f"**Event Type:** `{event_type.upper()}`")
-    st.write(f"**Detected Theme:** `{theme}`")
-    st.write(f"**Impact Score:** `{impact_score}/100`")
-    
-    if event_type == "irrelevant":
-        st.warning("This event is not market-relevant. No portfolio change recommended.")
-        st.stop()
-    if event_type == "micro":
-        st.info("Micro-level event detected. For demo, minor rebalancing rules may apply.")
-    
-    if not horizon_threshold(impact_score, horizon_years):
-        st.info("Event severity is below horizon-aware threshold. No rebalance needed.")
-        st.stop()
-    
-    st.markdown("## 🔄 Suggested Portfolio Rebalance")
-    intensity_factor = impact_score / 100
-    updated_portfolio = apply_rebalance(initial_weights, theme, intensity_factor)
-    
-    # Display bar charts
-    st.bar_chart(pd.DataFrame({
-        "Current Portfolio": pd.Series(initial_weights),
-        "Suggested Portfolio": pd.Series(updated_portfolio)
-    }))
-    
-    col1, col2 = st.columns(2)
-    if col1.button("📩 Send Alert (Simulated)"):
-        st.info("Alert sent to user (simulated).")
-    if col2.button("✔ Approve Rebalance (Demo Only)"):
-        st.success("Rebalance approved and applied (simulated).")
+        overall_impact = np.mean(list(impact_scores.values()))
 
+        st.markdown("### 📈 Asset Impact Scores")
+        df = pd.DataFrame.from_dict(impact_scores, orient="index", columns=["Impact Score"])
+        st.bar_chart(df)
+
+        if overall_impact >= horizon_threshold[time_horizon]:
+            st.success("✅ **Rebalancing Recommended** based on your time horizon.")
+        else:
+            st.warning("ℹ️ Impact detected, but **not strong enough** to rebalance for your horizon.")
+
+# ---------------- FOOTER ---------------- #
 st.markdown("---")
-st.caption("MacroMoney Demo v2.4 — Not financial advice. For research/testing only.")
+st.caption("MacroMoney • Demo Version • No real trades executed")
+
 
 
 
